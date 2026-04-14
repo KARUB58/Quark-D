@@ -3,111 +3,212 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Etkileşimli Havada Çizim & Renk Seçimi</title>
+    <title>Pro AI Air Paint</title>
     
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
 
     <style>
-        body {
-            margin: 0;
-            padding: 0;
-            overflow: hidden;
-            background-color: #111;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        }
-        canvas {
-            display: block;
-            transform: scaleX(-1); /* Ayna efekti */
-        }
-        .input_video {
-            display: none; 
-        }
+        :root { --glass: rgba(255, 255, 255, 0.1); --blur: blur(12px); }
+        body { margin: 0; background: #050505; color: white; font-family: 'Inter', sans-serif; overflow: hidden; }
         
-        /* Şeffaf Bilgi Kutusu */
-        #info {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            color: rgba(255, 255, 255, 0.9);
-            background: rgba(0, 0, 0, 0.3); /* Yarı şeffaf siyah arka plan */
-            backdrop-filter: blur(10px); /* Arka planı bulanıklaştırma (Cam efekti) */
-            padding: 15px 20px;
-            border-radius: 15px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            z-index: 10;
-        }
-        #info h3 { margin-top: 0; margin-bottom: 10px; color: #fff; }
-        #info p { margin: 5px 0; font-size: 14px; }
-
-        /* Şeffaf Renk Paleti */
-        #color-picker {
-            position: absolute;
-            bottom: 30px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: rgba(0, 0, 0, 0.4); /* Yarı şeffaf arka plan */
-            backdrop-filter: blur(15px); /* Cam efekti */
-            padding: 10px 20px;
-            border-radius: 30px;
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            display: flex;
-            gap: 15px;
-            z-index: 10;
+        canvas { position: absolute; top: 0; left: 0; transform: scaleX(-1); }
+        
+        #ui-layer { position: absolute; inset: 0; pointer-events: none; z-index: 10; }
+        .panel { 
+            position: absolute; pointer-events: auto;
+            background: rgba(0, 0, 0, 0.4); backdrop-filter: var(--blur);
+            border: 1px solid var(--glass); border-radius: 20px; padding: 15px;
         }
 
-        /* Renk Daireleri */
-        .color-swatch {
-            width: 35px;
-            height: 35px;
-            border-radius: 50%;
-            cursor: pointer;
-            border: 2px solid rgba(255, 255, 255, 0.5);
-            transition: all 0.2s ease;
-            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+        #info { top: 20px; left: 20px; width: 250px; }
+        #color-picker { 
+            bottom: 30px; left: 50%; transform: translateX(-50%); 
+            display: flex; gap: 15px; border-radius: 50px; padding: 10px 25px;
         }
 
-        /* Fare üzerine gelince ve seçili olunca büyüme efekti */
-        .color-swatch:hover, .color-swatch.active {
-            transform: scale(1.2);
-            border-color: #fff;
-            box-shadow: 0 0 15px currentColor; /* Kendi renginde parlama */
+        .color-node { 
+            width: 35px; height: 35px; border-radius: 50%; cursor: pointer; 
+            border: 3px solid transparent; transition: 0.3s; 
         }
+        .color-node.active { border-color: white; transform: scale(1.2); box-shadow: 0 0 20px currentColor; }
+
+        .status-badge {
+            display: inline-block; padding: 4px 10px; border-radius: 5px;
+            font-size: 12px; font-weight: bold; text-transform: uppercase; margin-bottom: 10px;
+        }
+        .mode-draw { background: #ff0055; }
+        .mode-move { background: #00e5ff; }
     </style>
 </head>
 <body>
 
-    <div id="info">
-        <h3>Havada Çizim</h3>
-        <p>🖊️ Çiz: İşaret + Baş parmak</p>
-        <p>✋ Taşı: Orta + Baş parmak</p>
-        <p>🗑️ Sil: Yüzük + Baş parmak</p>
-        <p>📏 Boyut: İki elde İşaret + Baş parmak</p>
+    <div id="ui-layer">
+        <div id="info" class="panel">
+            <div id="current-mode" class="status-badge mode-draw">MOD: İZLEME</div>
+            <div style="font-size: 13px; opacity: 0.8;">
+                👌 <b>Çizim:</b> İşaret + Baş<br>
+                🤏 <b>Taşıma:</b> Orta + Baş<br>
+                🖐️ <b>Silme:</b> Yüzük + Baş<br>
+                👐 <b>Boyut:</b> Çift El (İşaret + Baş)
+            </div>
+        </div>
+
+        <div id="color-picker" class="panel">
+            <div class="color-node active" style="background: #ff0055; color: #ff0055;" data-color="#ff0055"></div>
+            <div class="color-node" style="background: #00e5ff; color: #00e5ff;" data-color="#00e5ff"></div>
+            <div class="color-node" style="background: #39ff14; color: #39ff14;" data-color="#39ff14"></div>
+            <div class="color-node" style="background: #ffea00; color: #ffea00;" data-color="#ffea00"></div>
+            <div class="color-node" style="background: #ffffff; color: #ffffff;" data-color="#ffffff"></div>
+        </div>
     </div>
 
-    <div id="color-picker">
-        <div class="color-swatch active" style="background-color: #ff0055; color: #ff0055;" data-color="#ff0055"></div>
-        <div class="color-swatch" style="background-color: #00e5ff; color: #00e5ff;" data-color="#00e5ff"></div>
-        <div class="color-swatch" style="background-color: #39ff14; color: #39ff14;" data-color="#39ff14"></div>
-        <div class="color-swatch" style="background-color: #ffea00; color: #ffea00;" data-color="#ffea00"></div>
-        <div class="color-swatch" style="background-color: #b026ff; color: #b026ff;" data-color="#b026ff"></div>
-        <div class="color-swatch" style="background-color: #ffffff; color: #ffffff;" data-color="#ffffff"></div>
-    </div>
-
-    <video class="input_video"></video>
+    <video class="input_video" style="display:none"></video>
     <canvas class="output_canvas"></canvas>
 
     <script>
         const videoElement = document.querySelector('.input_video');
         const canvasElement = document.querySelector('.output_canvas');
         const canvasCtx = canvasElement.getContext('2d');
+        const modeIndicator = document.getElementById('current-mode');
 
+        let drawings = [];
+        let currentPath = null;
+        let currentColor = '#ff0055';
+        let brushSize = 8;
+        let selectedObj = null;
+        let lastPinchPos = null;
+
+        // Ayarlar
+        canvasElement.width = window.innerWidth;
+        canvasElement.height = window.innerHeight;
+
+        // Renk Seçimi
+        document.querySelectorAll('.color-node').forEach(el => {
+            el.addEventListener('click', () => {
+                document.querySelector('.color-node.active').classList.remove('active');
+                el.classList.add('active');
+                currentColor = el.dataset.color;
+            });
+        });
+
+        function getDist(p1, p2) {
+            return Math.hypot(p1.x - p2.x, p1.y - p2.y);
+        }
+
+        function onResults(results) {
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            
+            let currentAction = "İZLEME";
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const hands = results.multiHandLandmarks;
+
+                // BOYUT AYARI (Çift El)
+                if (hands.length === 2) {
+                    const d1 = getDist(hands[0][8], hands[0][4]);
+                    const d2 = getDist(hands[1][8], hands[1][4]);
+                    if (d1 < 0.05 && d2 < 0.05) {
+                        const globalDist = getDist(hands[0][8], hands[1][8]);
+                        brushSize = Math.max(2, Math.min(50, globalDist * 100));
+                        currentAction = "BOYUT AYARLANIYOR";
+                    }
+                }
+
+                // TEK EL AKSİYONLARI
+                const hand = hands[0];
+                const thumb = hand[4];
+                const index = hand[8];
+                const middle = hand[12];
+                const ring = hand[16];
+
+                const p1 = getDist(index, thumb) < 0.04;  // Çizim
+                const p2 = getDist(middle, thumb) < 0.04; // Taşıma
+                const p3 = getDist(ring, thumb) < 0.04;   // Silme
+
+                const x = index.x * canvasElement.width;
+                const y = index.y * canvasElement.height;
+
+                if (p1) {
+                    currentAction = "ÇİZİLİYOR";
+                    if (!currentPath) {
+                        currentPath = { points: [], color: currentColor, size: brushSize };
+                        drawings.push(currentPath);
+                    }
+                    currentPath.points.push({x, y});
+                } else {
+                    currentPath = null;
+                }
+
+                if (p2) {
+                    currentAction = "TAŞINIYOR";
+                    if (!selectedObj) {
+                        selectedObj = drawings.find(d => d.points.some(pt => Math.hypot(pt.x - x, pt.y - y) < 30));
+                        lastPinchPos = {x, y};
+                    } else if (lastPinchPos) {
+                        const dx = x - lastPinchPos.x;
+                        const dy = y - lastPinchPos.y;
+                        selectedObj.points.forEach(pt => { pt.x += dx; pt.y += dy; });
+                        lastPinchPos = {x, y};
+                    }
+                } else {
+                    selectedObj = null;
+                }
+
+                if (p3) {
+                    currentAction = "SİLİNİYOR";
+                    drawings = drawings.filter(d => !d.points.some(pt => Math.hypot(pt.x - x, pt.y - y) < 20));
+                }
+
+                // El İskeleti Çizimi (Neon Soft)
+                drawConnectors(canvasCtx, hand, HAND_CONNECTIONS, {color: 'rgba(0,255,255,0.2)', lineWidth: 2});
+                drawLandmarks(canvasCtx, hand, {color: currentColor, radius: 3});
+            }
+
+            // MOD GÜNCELLEME
+            modeIndicator.innerText = `MOD: ${currentAction}`;
+            modeIndicator.className = `status-badge mode-${currentAction === 'ÇİZİLİYOR' ? 'draw' : 'move'}`;
+
+            // TÜM ÇİZİMLERİ RENDER ET
+            canvasCtx.lineCap = 'round';
+            canvasCtx.lineJoin = 'round';
+            drawings.forEach(path => {
+                if (path.points.length < 2) return;
+                canvasCtx.beginPath();
+                canvasCtx.strokeStyle = path.color;
+                canvasCtx.lineWidth = path.size;
+                canvasCtx.shadowBlur = 15;
+                canvasCtx.shadowColor = path.color;
+                
+                canvasCtx.moveTo(path.points[0].x, path.points[0].y);
+                for (let i = 1; i < path.points.length; i++) {
+                    canvasCtx.lineTo(path.points[i].x, path.points[i].y);
+                }
+                canvasCtx.stroke();
+            });
+
+            canvasCtx.restore();
+        }
+
+        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.8, minTrackingConfidence: 0.8 });
+        hands.onResults(onResults);
+
+        const camera = new Camera(videoElement, {
+            onFrame: async () => { await hands.send({image: videoElement}); },
+            width: 1280, height: 720
+        });
+        camera.start();
+
+        window.addEventListener('resize', () => {
+            canvasElement.width = window.innerWidth;
+            canvasElement.height = window.innerHeight;
+        });
+    </script>
+</body>
+</html>
         canvasElement.width = window.innerWidth;
         canvasElement.height = window.innerHeight;
 
