@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Yapay Zeka ile Havada Çizim</title>
+    <title>Etkileşimli Havada Çizim</title>
     
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
@@ -15,7 +15,7 @@
             margin: 0;
             padding: 0;
             overflow: hidden;
-            background-color: #111; /* Videodaki gibi karanlık arka plan */
+            background-color: #111;
             display: flex;
             justify-content: center;
             align-items: center;
@@ -23,10 +23,8 @@
         }
         canvas {
             display: block;
-            /* Ayna efekti: Kamerada hareketlerinizin ters olmaması için */
-            transform: scaleX(-1); 
+            transform: scaleX(-1); /* Ayna efekti */
         }
-        /* Kameranın kendi görüntüsünü gizliyoruz, sadece çizgileri göreceğiz */
         .input_video {
             display: none; 
         }
@@ -46,10 +44,11 @@
 <body>
 
     <div id="info">
-        <h3>Havada Çizim</h3>
-        <p>🖊️ Çizmek için: Sadece işaret parmağınızı havaya kaldırın.</p>
-        <p>✋ Durdurmak için: Elinizi tamamen açın.</p>
-        <p>🔄 Ekranı temizlemek için sayfayı yenileyin.</p>
+        <h3>Etkileşimli Havada Çizim</h3>
+        <p>🖊️ Çiz: İşaret + Baş parmak birleştir (Tek el)</p>
+        <p>✋ Tut & Taşı: Orta + Baş parmak birleştir (Tek el)</p>
+        <p>🗑️ Sil: Yüzük + Baş parmak birleştir (Tek el)</p>
+        <p>📏 Boyut: İki elde İşaret + Baş parmak birleştir</p>
     </div>
 
     <video class="input_video"></video>
@@ -64,9 +63,15 @@
         canvasElement.width = window.innerWidth;
         canvasElement.height = window.innerHeight;
 
-        let paths = []; // Tüm çizilen çizgileri tutacağımız dizi
+        let drawings = []; // Çizimleri saklayacağımız dizi (noktalar, boyut, renk)
         let currentPath = []; // O an çizilen çizgi
         let isDrawing = false;
+        let isDragging = false;
+        let isResizing = false;
+        let selectedDrawing = null;
+        let lastPosition = { x: 0, y: 0 };
+        let currentSize = 6;
+        let baseDistance = 0;
 
         function onResults(results) {
             canvasCtx.save();
@@ -74,40 +79,183 @@
             canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
 
             if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-                for (const landmarks of results.multiHandLandmarks) {
-                    
-                    // 1. Elin İskeletini Çiz (Videodaki gibi camgöbeği/neon mavi)
+                const hands = results.multiHandLandmarks;
+
+                // 1. İki El Etkileşimi (Boyut Ayarla)
+                if (hands.length === 2) {
+                    const leftHand = hands[0];
+                    const rightHand = hands[1];
+                    const leftPinch = isPinching(leftHand, 8, 4); // İşaret + Baş (Sol)
+                    const rightPinch = isPinching(rightHand, 8, 4); // İşaret + Baş (Sağ)
+
+                    if (leftPinch.isPinching && rightPinch.isPinching) {
+                        const distance = Math.sqrt(Math.pow(leftPinch.x - rightPinch.x, 2) + Math.pow(leftPinch.y - rightPinch.y, 2));
+                        if (!isResizing) {
+                            isResizing = true;
+                            baseDistance = distance;
+                        } else {
+                            currentSize = Math.max(1, Math.min(20, currentSize * (distance / baseDistance)));
+                        }
+                    } else {
+                        isResizing = false;
+                    }
+                } else {
+                    isResizing = false;
+                }
+
+                for (let i = 0; i < hands.length; i++) {
+                    const landmarks = hands[i];
+
+                    // El iskeletini çiz (Camgöbeği)
                     drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00e5ff', lineWidth: 3});
                     drawLandmarks(canvasCtx, landmarks, {color: '#00e5ff', lineWidth: 1, radius: 2});
 
-                    // 2. Çizim Mantığı
-                    // İşaret parmağının ucu (8) ve orta boğumu (6)
-                    const indexTip = landmarks[8];
-                    const indexPip = landmarks[6];
-                    
-                    // Orta parmağın ucu (12) ve orta boğumu (10)
-                    const middleTip = landmarks[12];
-                    const middlePip = landmarks[10];
+                    // 2. Tek El Etkileşimleri (Çiz, Taşı, Sil)
+                    const indexPinch = isPinching(landmarks, 8, 4); // İşaret + Baş
+                    const middlePinch = isPinching(landmarks, 12, 4); // Orta + Baş
+                    const ringPinch = isPinching(landmarks, 16, 4); // Yüzük + Baş
 
-                    // X ve Y koordinatlarını Canvas boyutuna uyarla
-                    const x = indexTip.x * canvasElement.width;
-                    const y = indexTip.y * canvasElement.height;
-
-                    // Çizim şartı: İşaret parmağı havada VE Orta parmak kapalıysa
-                    const isIndexUp = indexTip.y < indexPip.y;
-                    const isMiddleDown = middleTip.y > middlePip.y;
-
-                    if (isIndexUp && isMiddleDown) {
+                    // Çiz
+                    if (indexPinch.isPinching && !isDragging && !isResizing) {
                         if (!isDrawing) {
                             isDrawing = true;
                             currentPath = [];
-                            paths.push(currentPath);
+                            drawings.push({ points: currentPath, size: currentSize, color: '#ff0055' });
                         }
-                        currentPath.push({x: x, y: y});
+                        currentPath.push({x: indexPinch.x, y: indexPinch.y});
                     } else {
                         isDrawing = false;
                     }
+
+                    // Tut & Taşı
+                    if (middlePinch.isPinching && !isDrawing && !isResizing) {
+                        if (!isDragging) {
+                            isDragging = true;
+                            selectedDrawing = findNearestDrawing(middlePinch);
+                            lastPosition = { x: middlePinch.x, y: middlePinch.y };
+                        } else if (selectedDrawing) {
+                            const dx = middlePinch.x - lastPosition.x;
+                            const dy = middlePinch.y - lastPosition.y;
+                            moveDrawing(selectedDrawing, dx, dy);
+                            lastPosition = { x: middlePinch.x, y: middlePinch.y };
+                        }
+                    } else {
+                        isDragging = false;
+                        selectedDrawing = null;
+                    }
+
+                    // Sil
+                    if (ringPinch.isPinching && !isDrawing && !isDragging && !isResizing) {
+                        eraseDrawing(ringPinch);
+                    }
                 }
+            } else {
+                // Hiç el algılanmazsa durumları sıfırla
+                isDrawing = false;
+                isDragging = false;
+                isResizing = false;
+            }
+
+            // 3. Çizimleri Ekrana Çiz
+            drawings.forEach(drawing => {
+                if (drawing.points.length > 0) {
+                    canvasCtx.strokeStyle = drawing.color;
+                    canvasCtx.lineWidth = drawing.size;
+                    canvasCtx.lineCap = 'round';
+                    canvasCtx.lineJoin = 'round';
+                    canvasCtx.shadowColor = drawing.color;
+                    canvasCtx.shadowBlur = 15;
+                    canvasCtx.beginPath();
+                    canvasCtx.moveTo(drawing.points[0].x * canvasElement.width, drawing.points[0].y * canvasElement.height);
+                    for (let i = 1; i < drawing.points.length; i++) {
+                        canvasCtx.lineTo(drawing.points[i].x * canvasElement.width, drawing.points[i].y * canvasElement.height);
+                    }
+                    canvasCtx.stroke();
+                }
+            });
+
+            canvasCtx.restore();
+        }
+
+        // Yardımcı Fonksiyonlar:
+
+        // El birleşimi kontrolü (Pinch algılama)
+        function isPinching(landmarks, tipIndex, baseIndex) {
+            const tip = landmarks[tipIndex];
+            const base = landmarks[baseIndex];
+            const distance = Math.sqrt(Math.pow(tip.x - base.x, 2) + Math.pow(tip.y - base.y, 2));
+            return { isPinching: distance < 0.05, x: tip.x, y: tip.y }; // Mesafe hassasiyeti (0.05)
+        }
+
+        // En yakın çizimi bulma (Taşıma ve silme için)
+        function findNearestDrawing(pinchPoint) {
+            let nearestDrawing = null;
+            let minDistance = Infinity;
+            drawings.forEach(drawing => {
+                drawing.points.forEach(point => {
+                    const distance = Math.sqrt(Math.pow(point.x - pinchPoint.x, 2) + Math.pow(point.y - pinchPoint.y, 2));
+                    if (distance < minDistance) {
+                        minDistance = distance;
+                        nearestDrawing = drawing;
+                    }
+                });
+            });
+            return minDistance < 0.1 ? nearestDrawing : null; // Mesafe hassasiyeti (0.1)
+        }
+
+        // Çizimi taşıma
+        function moveDrawing(drawing, dx, dy) {
+            drawing.points.forEach(point => {
+                point.x += dx;
+                point.y += dy;
+            });
+        }
+
+        // Çizimi silme
+        function eraseDrawing(ringPinch) {
+            drawings.forEach((drawing, index) => {
+                drawing.points.forEach(point => {
+                    const distance = Math.sqrt(Math.pow(point.x - ringPinch.x, 2) + Math.pow(point.y - ringPinch.y, 2));
+                    if (distance < drawing.size / 1000) { // Silme hassasiyeti (çizim boyutuna göre)
+                        drawings.splice(index, 1);
+                        return; // Sadece bir noktayı silmek yerine tüm çizimi sil
+                    }
+                });
+            });
+        }
+
+        // MediaPipe Hands Ayarları
+        const hands = new Hands({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+        }});
+        
+        hands.setOptions({
+            maxNumHands: 2, // 2 eli de takip et
+            modelComplexity: 1,
+            minDetectionConfidence: 0.7,
+            minTrackingConfidence: 0.7
+        });
+        
+        hands.onResults(onResults);
+
+        // Kamerayı Başlat
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({image: videoElement});
+            },
+            width: 1280,
+            height: 720
+        });
+        camera.start();
+
+        // Ekran boyutu değiştiğinde canvası güncelle
+        window.addEventListener('resize', () => {
+            canvasElement.width = window.innerWidth;
+            canvasElement.height = window.innerHeight;
+        });
+    </script>
+</body>
+</html>
             } else {
                 isDrawing = false;
             }
