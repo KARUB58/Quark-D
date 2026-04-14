@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Yapay Zeka ile Havada Çizim</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #111; /* Videodaki gibi karanlık arka plan */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        canvas {
+            display: block;
+            /* Ayna efekti: Kamerada hareketlerinizin ters olmaması için */
+            transform: scaleX(-1); 
+        }
+        /* Kameranın kendi görüntüsünü gizliyoruz, sadece çizgileri göreceğiz */
+        .input_video {
+            display: none; 
+        }
+        #info {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            font-family: sans-serif;
+            background: rgba(0,0,0,0.5);
+            padding: 10px;
+            border-radius: 8px;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="info">
+        <h3>Havada Çizim</h3>
+        <p>🖊️ Çizmek için: Sadece işaret parmağınızı havaya kaldırın.</p>
+        <p>✋ Durdurmak için: Elinizi tamamen açın.</p>
+        <p>🔄 Ekranı temizlemek için sayfayı yenileyin.</p>
+    </div>
+
+    <video class="input_video"></video>
+    <canvas class="output_canvas"></canvas>
+
+    <script>
+        const videoElement = document.querySelector('.input_video');
+        const canvasElement = document.querySelector('.output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+
+        // Canvas boyutunu tam ekran yap
+        canvasElement.width = window.innerWidth;
+        canvasElement.height = window.innerHeight;
+
+        let paths = []; // Tüm çizilen çizgileri tutacağımız dizi
+        let currentPath = []; // O an çizilen çizgi
+        let isDrawing = false;
+
+        function onResults(results) {
+            canvasCtx.save();
+            // Ekranı temizle (Siyah arka plan)
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                for (const landmarks of results.multiHandLandmarks) {
+                    
+                    // 1. Elin İskeletini Çiz (Videodaki gibi camgöbeği/neon mavi)
+                    drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00e5ff', lineWidth: 3});
+                    drawLandmarks(canvasCtx, landmarks, {color: '#00e5ff', lineWidth: 1, radius: 2});
+
+                    // 2. Çizim Mantığı
+                    // İşaret parmağının ucu (8) ve orta boğumu (6)
+                    const indexTip = landmarks[8];
+                    const indexPip = landmarks[6];
+                    
+                    // Orta parmağın ucu (12) ve orta boğumu (10)
+                    const middleTip = landmarks[12];
+                    const middlePip = landmarks[10];
+
+                    // X ve Y koordinatlarını Canvas boyutuna uyarla
+                    const x = indexTip.x * canvasElement.width;
+                    const y = indexTip.y * canvasElement.height;
+
+                    // Çizim şartı: İşaret parmağı havada VE Orta parmak kapalıysa
+                    const isIndexUp = indexTip.y < indexPip.y;
+                    const isMiddleDown = middleTip.y > middlePip.y;
+
+                    if (isIndexUp && isMiddleDown) {
+                        if (!isDrawing) {
+                            isDrawing = true;
+                            currentPath = [];
+                            paths.push(currentPath);
+                        }
+                        currentPath.push({x: x, y: y});
+                    } else {
+                        isDrawing = false;
+                    }
+                }
+            } else {
+                isDrawing = false;
+            }
+
+            // 3. Çizilen Çizgileri Ekrana Yansıt (Neon Pembe/Kırmızı)
+            canvasCtx.strokeStyle = '#ff0055';
+            canvasCtx.lineWidth = 6;
+            canvasCtx.lineCap = 'round';
+            canvasCtx.lineJoin = 'round';
+            
+            // Neon Parlama Efekti
+            canvasCtx.shadowColor = '#ff0055';
+            canvasCtx.shadowBlur = 15;
+
+            paths.forEach(path => {
+                if (path.length > 0) {
+                    canvasCtx.beginPath();
+                    canvasCtx.moveTo(path[0].x, path[0].y);
+                    for (let i = 1; i < path.length; i++) {
+                        canvasCtx.lineTo(path[i].x, path[i].y);
+                    }
+                    canvasCtx.stroke();
+                }
+            });
+
+            canvasCtx.restore();
+        }
+
+        // MediaPipe Hands Ayarları
+        const hands = new Hands({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+        }});
+        
+        hands.setOptions({
+            maxNumHands: 1, // Sadece 1 eli takip et
+            modelComplexity: 1,
+            minDetectionConfidence: 0.7,
+            minTrackingConfidence: 0.7
+        });
+        
+        hands.onResults(onResults);
+
+        // Kamerayı Başlat
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({image: videoElement});
+            },
+            width: 1280,
+            height: 720
+        });
+        camera.start();
+
+        // Ekran boyutu değiştiğinde canvası güncelle
+        window.addEventListener('resize', () => {
+            canvasElement.width = window.innerWidth;
+            canvasElement.height = window.innerHeight;
+        });
+    </script>
+</body>
+</html>
+
