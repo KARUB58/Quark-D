@@ -3,38 +3,67 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Pen & 3D Hand Mesh</title>
+    <title>3D Hand Mesh & Air Paint PRO</title>
     
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
 
     <style>
-        body { margin: 0; background: #050505; color: white; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
+        :root { --accent: #ff0055; --bg: #050505; }
+        body { margin: 0; background: var(--bg); color: white; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
+        
         canvas { position: absolute; top: 0; left: 0; transform: scaleX(-1); }
         .input_video { display: none; }
 
-        .ui-panel {
+        /* Cam Efekti UI */
+        .glass-panel {
             position: absolute; z-index: 100;
-            background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(20px);
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(15px);
             border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 20px; padding: 20px;
+            border-radius: 20px;
+            padding: 15px;
+            pointer-events: auto;
         }
-        #info-box { top: 20px; left: 20px; pointer-events: none; }
-        .pen-tip { width: 10px; height: 10px; background: white; border-radius: 50%; position: absolute; display: none; z-index: 1000; box-shadow: 0 0 10px white; }
+
+        #status-bar { top: 20px; left: 20px; min-width: 200px; }
+        .mode-indicator { 
+            font-weight: bold; font-size: 12px; letter-spacing: 1px;
+            padding: 4px 10px; border-radius: 8px; margin-bottom: 10px; display: inline-block;
+        }
+
+        #color-bar { 
+            bottom: 30px; left: 50%; transform: translateX(-50%);
+            display: flex; gap: 15px; border-radius: 40px;
+        }
+
+        .swatch {
+            width: 32px; height: 32px; border-radius: 50%; cursor: pointer;
+            border: 2px solid transparent; transition: 0.3s;
+        }
+        .swatch.active { border-color: white; transform: scale(1.2); box-shadow: 0 0 15px currentColor; }
     </style>
 </head>
 <body>
 
-    <div id="info-box" class="ui-panel">
-        <h3 style="margin:0">🖋️ Kalem Modu Aktif</h3>
-        <p style="font-size: 13px; opacity: 0.8;">
-            Kalemi elinle tut, yapay zeka kalem ucunu takip edecek.<br>
-            <b>Çizmek için:</b> Kalemle havada hareket et.
-        </p>
+    <div id="status-bar" class="glass-panel">
+        <div id="current-mode" class="mode-indicator" style="background: #555;">SİSTEM HAZIR</div>
+        <div style="font-size: 12px; opacity: 0.7; line-height: 1.6;">
+            ✨ <b>İşaret+Baş:</b> Çiz<br>
+            ✊ <b>Orta+Baş:</b> Taşı<br>
+            ❌ <b>Yüzük+Baş:</b> Sil<br>
+            📏 <b>Çift El:</b> Boyut
+        </div>
     </div>
 
-    <div id="pen-cursor" class="pen-tip"></div>
+    <div id="color-bar" class="glass-panel">
+        <div class="swatch active" style="background: #ff0055; color: #ff0055;" data-color="#ff0055"></div>
+        <div class="swatch" style="background: #00e5ff; color: #00e5ff;" data-color="#00e5ff"></div>
+        <div class="swatch" style="background: #39ff14; color: #39ff14;" data-color="#39ff14"></div>
+        <div class="swatch" style="background: #ffea00; color: #ffea00;" data-color="#ffea00"></div>
+        <div class="swatch" style="background: #ffffff; color: #ffffff;" data-color="#ffffff"></div>
+    </div>
 
     <video class="input_video"></video>
     <canvas class="output_canvas"></canvas>
@@ -43,26 +72,60 @@
         const videoElement = document.querySelector('.input_video');
         const canvasElement = document.querySelector('.output_canvas');
         const canvasCtx = canvasElement.getContext('2d');
-        const cursor = document.getElementById('pen-cursor');
+        const modeLabel = document.getElementById('current-mode');
 
         let drawings = [];
         let currentPath = null;
-        let activeColor = '#00ffcc';
-        
+        let activeColor = '#ff0055';
+        let brushSize = 8;
+        let grabbedDrawing = null;
+        let lastPos = { x: 0, y: 0 };
+
         canvasElement.width = window.innerWidth;
         canvasElement.height = window.innerHeight;
 
-        function draw3DMesh(landmarks) {
-            // El üzerindeki yoğun nokta bulutu
+        // Renk Seçici
+        document.querySelectorAll('.swatch').forEach(s => {
+            s.addEventListener('click', () => {
+                document.querySelector('.swatch.active').classList.remove('active');
+                s.classList.add('active');
+                activeColor = s.dataset.color;
+            });
+        });
+
+        // Nokta yoğunluğunu artıran fonksiyon (3D Mesh Efekti)
+        function drawRichHand(landmarks) {
+            // Bağlantı noktaları arasındaki boşlukları doldur
+            HAND_CONNECTIONS.forEach(([startIdx, endIdx]) => {
+                const start = landmarks[startIdx];
+                const end = landmarks[endIdx];
+                
+                // Her kemik arasına 5 ekstra nokta ekle
+                for (let i = 0; i <= 5; i++) {
+                    const t = i / 5;
+                    const x = (start.x + (end.x - start.x) * t) * canvasElement.width;
+                    const y = (start.y + (end.y - start.y) * t) * canvasElement.height;
+                    const z = (start.z + (end.z - start.z) * t); // Derinlik bilgisi
+
+                    const size = 1.5 + (z * -5); // Yakındaki noktalar daha büyük
+                    canvasCtx.fillStyle = `rgba(255, 255, 255, ${0.4 + (z * -2)})`;
+                    canvasCtx.beginPath();
+                    canvasCtx.arc(x, y, Math.max(0.5, size), 0, Math.PI * 2);
+                    canvasCtx.fill();
+                }
+            });
+
+            // Ana eklemleri büyük ve parlak çiz
             landmarks.forEach((pt, i) => {
                 const x = pt.x * canvasElement.width;
                 const y = pt.y * canvasElement.height;
-                // Noktalar elin derinliğine göre parlasın
-                const size = 2 + (pt.z * -10);
-                canvasCtx.fillStyle = `rgba(0, 255, 204, ${0.5 + (pt.z * -2)})`;
+                canvasCtx.shadowBlur = 10;
+                canvasCtx.shadowColor = activeColor;
+                canvasCtx.fillStyle = i === 8 || i === 4 ? '#fff' : activeColor;
                 canvasCtx.beginPath();
-                canvasCtx.arc(x, y, Math.max(1, size), 0, Math.PI * 2);
+                canvasCtx.arc(x, y, 4, 0, Math.PI * 2);
                 canvasCtx.fill();
+                canvasCtx.shadowBlur = 0;
             });
         }
 
@@ -70,44 +133,113 @@
             canvasCtx.save();
             canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
             
+            let status = "İZLENİYOR";
+
             if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-                const hand = results.multiHandLandmarks[0];
-                
-                // 3D Ağımızı çiz
-                draw3DMesh(hand);
+                const hands = results.multiHandLandmarks;
 
-                // Kalem ucu (İşaret parmağı ucu)
-                const indexTip = hand[8];
-                const x = (1 - indexTip.x) * canvasElement.width; // Ayna yansıması düzeltildi
-                const y = indexTip.y * canvasElement.height;
-
-                // Kalem imlecini güncelle
-                cursor.style.display = 'block';
-                cursor.style.left = `${x}px`;
-                cursor.style.top = `${y}px`;
-
-                // Kalemle Çizim (Sürekli mod - kalem tutuşunu algılar)
-                if (!currentPath) {
-                    currentPath = { pts: [], color: activeColor };
-                    drawings.push(currentPath);
+                // BOYUT AYARI (İki El)
+                if (hands.length === 2) {
+                    const dist = Math.hypot(hands[0][8].x - hands[1][8].x, hands[0][8].y - hands[1][8].y);
+                    brushSize = Math.max(2, Math.min(60, dist * 150));
+                    status = "BOYUT: " + Math.round(brushSize);
                 }
-                currentPath.pts.push({x, y});
-            } else {
-                cursor.style.display = 'none';
-                currentPath = null;
+
+                const mainHand = hands[0];
+                const thumb = mainHand[4];
+                const index = mainHand[8];
+                const middle = mainHand[12];
+                const ring = mainHand[16];
+
+                const x = index.x * canvasElement.width;
+                const y = index.y * canvasElement.height;
+
+                // Pinch (Mesafe) Kontrolleri
+                const isDrawing = Math.hypot(index.x - thumb.x, index.y - thumb.y) < 0.04;
+                const isMoving = Math.hypot(middle.x - thumb.x, middle.y - thumb.y) < 0.04;
+                const isErasing = Math.hypot(ring.x - thumb.x, ring.y - thumb.y) < 0.04;
+
+                if (isDrawing) {
+                    status = "ÇİZİLİYOR";
+                    if (!currentPath) {
+                        currentPath = { pts: [], color: activeColor, size: brushSize };
+                        drawings.push(currentPath);
+                    }
+                    currentPath.pts.push({x, y});
+                } else {
+                    currentPath = null;
+                }
+
+                if (isMoving) {
+                    status = "TAŞINIYOR";
+                    if (!grabbedDrawing) {
+                        grabbedDrawing = drawings.find(d => d.pts.some(p => Math.hypot(p.x - x, p.y - y) < 40));
+                        lastPos = { x, y };
+                    } else {
+                        const dx = x - lastPos.x;
+                        const dy = y - lastPos.y;
+                        grabbedDrawing.pts.forEach(p => { p.x += dx; p.y += dy; });
+                        lastPos = { x, y };
+                    }
+                } else {
+                    grabbedDrawing = null;
+                }
+
+                if (isErasing) {
+                    status = "SİLİNİYOR";
+                    drawings = drawings.filter(d => !d.pts.some(p => Math.hypot(p.x - x, p.y - y) < 25));
+                }
+
+                // 3D Mesh Eli Çiz
+                drawRichHand(mainHand);
             }
 
-            // Çizimleri render et
+            // Çizimleri Render Et (Neon Smooth)
             drawings.forEach(d => {
                 if (d.pts.length < 2) return;
                 canvasCtx.beginPath();
                 canvasCtx.strokeStyle = d.color;
-                canvasCtx.lineWidth = 4;
+                canvasCtx.lineWidth = d.size;
                 canvasCtx.lineCap = 'round';
-                canvasCtx.shadowBlur = 10;
+                canvasCtx.lineJoin = 'round';
+                canvasCtx.shadowBlur = 15;
                 canvasCtx.shadowColor = d.color;
+                
                 canvasCtx.moveTo(d.pts[0].x, d.pts[0].y);
                 for (let i = 1; i < d.pts.length; i++) {
+                    canvasCtx.lineTo(d.pts[i].x, d.pts[i].y);
+                }
+                canvasCtx.stroke();
+                canvasCtx.shadowBlur = 0;
+            });
+
+            modeLabel.innerText = status;
+            modeLabel.style.background = status === "ÇİZİLİYOR" ? "#ff0055" : (status === "TAŞINIYOR" ? "#00e5ff" : "#333");
+            canvasCtx.restore();
+        }
+
+        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        hands.setOptions({ 
+            maxNumHands: 2, 
+            modelComplexity: 1, 
+            minDetectionConfidence: 0.8, 
+            minTrackingConfidence: 0.8 
+        });
+        hands.onResults(onResults);
+
+        const camera = new Camera(videoElement, {
+            onFrame: async () => { await hands.send({image: videoElement}); },
+            width: 1280, height: 720
+        });
+        camera.start();
+
+        window.addEventListener('resize', () => {
+            canvasElement.width = window.innerWidth;
+            canvasElement.height = window.innerHeight;
+        });
+    </script>
+</body>
+</html>
                     canvasCtx.lineTo(d.pts[i].x, d.pts[i].y);
                 }
                 canvasCtx.stroke();
